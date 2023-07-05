@@ -1,9 +1,12 @@
 import os
 import uvicorn
+import json
+import asyncio
 from fastapi import File, UploadFile, Request, FastAPI, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -12,8 +15,8 @@ from pydantic import BaseModel
 PORT = os.environ.get('APP_PORT') or 8080
 
 app = FastAPI(
-    title='Tagging', 
-    version='0.0.1'
+    title='SharedModule', 
+    version='0.0.2'
 )
 
 #templates = Jinja2Templates(directory="templates")
@@ -34,108 +37,75 @@ app.add_middleware(
 )
 
 # Create a sqlite database engine and a session factory
-engine = create_engine("sqlite:///tagging.db")
+engine = create_engine("sqlite:///shared_module.db")
 Session = sessionmaker(bind=engine)
 
 # Create a base class for the database models
 Base = declarative_base()
 
-# Define the models for tags and items
-class Tag(Base):
-    __tablename__ = "tags"
-    id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True)
-    items = relationship("Item", secondary="item_tags")
+class Schema(Base):
+    __tablename__ = "schemas"
+    metaid = Column(String, primary_key=True)
+    msgbody = Column(String)
+    
+class Channel(Base):
+    __tablename__ = "channels"
+    channeltype = Column(String, primary_key=True)
+    id = Column(String, primary_key=True)
+    channlidmap = Column(String)
 
-class Item(Base):
-    __tablename__ = "items"
-    id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True)
-    tags = relationship("Tag", secondary="item_tags")
-
-# Define the association table for the many-to-many relationship between tags and items
-class ItemTag(Base):
-    __tablename__ = "item_tags"
-    tag_id = Column(Integer, ForeignKey("tags.id"), primary_key=True)
-    item_id = Column(Integer, ForeignKey("items.id"), primary_key=True)
+class Deidentification(Base):
+    __tablename__ = "deidentification"
+    methodid = Column(String, primary_key=True)
+    id = Column(String, primary_key=True)
+    encryptedid = Column(String)
 
 # Create the database tables if they do not exist
 Base.metadata.create_all(engine)
 
 # Define the pydantic models for the API requests and responses
 
-class TagCreate(BaseModel):
-    name: str
+class SchemaValidate(BaseModel):
+    result: str
+    errormsg :str
 
-class TagOut(BaseModel):
-    id: int
-    name: str
+class ChannelSearch(BaseModel):
+    channlidmap: str
 
-class ItemCreate(BaseModel):
-    name: str
-    tag_names: list[str]
-
-class ItemOut(BaseModel):
-    id: int
-    name: str
-    tag_names: list[str]
+class IdDeIdentify(BaseModel):
+    encryptedid: str
 
 # Define the API endpoints for creating and retrieving tags and items
 
-@app.post("/tags", response_model=TagOut)
-def create_tag(tag: TagCreate):
-    # Create a new tag with the given name
+@app.post("/schema/validate", response_model=SchemaValidate)
+def schema_validate(metaid: str, msgbody: str):
     session = Session()
-    new_tag = Tag(name=tag.name)
-    session.add(new_tag)
-    try:
-        session.commit()
-        return new_tag
-    except:
-        session.rollback()
-        raise HTTPException(status_code=400, detail="Tag already exists")
-
-@app.get("/tags/{tag_id}", response_model=TagOut)
-def get_tag(tag_id: int):
-    # Get the tag with the given id
-    session = Session()
-    tag = session.query(Tag).get(tag_id)
-    if tag:
-        return tag
+    json_schema_db = session.query(Schema).get(metaid)
+    if json_schema_db:
+        result = json.loads(json_schema_db) == json.loads(msgbody)
+        return result
     else:
-        raise HTTPException(status_code=404, detail="Tag not found")
+        raise HTTPException(status_code=204, detail="Schema not found")
 
-@app.post("/items", response_model=ItemOut)
-def create_item(item: ItemCreate):
-    # Create a new item with the given name and tags
+@app.post("/channel/search", response_model=ChannelSearch)
+def channel_search(channeltype: str, id: str):
     session = Session()
-    new_item = Item(name=item.name)
-    for tag_name in item.tag_names:
-        # Get or create the tag with the given name
-        tag = session.query(Tag).filter_by(name=tag_name).first()
-        if not tag:
-            tag = Tag(name=tag_name)
-            session.add(tag)
-        # Associate the item with the tag
-        new_item.tags.append(tag)
-    session.add(new_item)
-    try:
-        session.commit()
-        return ItemOut(id=new_item.id, name=new_item.name, tag_names=[tag.name for tag in new_item.tags])
-    except:
-        session.rollback()
-        raise HTTPException(status_code=400, detail="Item already exists")
-
-@app.get("/items/{item_id}", response_model=ItemOut)
-def get_item(item_id: int):
-    # Get the item with the given id and its tags
-    session = Session()
-    item = session.query(Item).get(item_id)
-    if item:
-        return ItemOut(id=item.id, name=item.name, tag_names=[tag.name for tag in item.tags])
+    result = session.query(Channel).filter_by(channeltype=channeltype, id=id)
+    if result:
+        pass
+        return result
     else:
-        raise HTTPException(status_code=404, detail="Item not found")
-
+        raise HTTPException(status_code=204, detail="Channel ID not found")
+    
+@app.post("/id/deidentify", response_model=IdDeIdentify)
+def id_deidentify(methodid: str, id: str):
+    session = Session()
+    result = session.query(Deidentification).filter_by(methodid=methodid, id=id)
+    if result:
+        pass
+        return result
+    else:
+        raise HTTPException(status_code=503, detail="Encrypt fail")
 
 if __name__ == "__main__":
     uvicorn.run(
